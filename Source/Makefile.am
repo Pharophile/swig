@@ -59,6 +59,7 @@ eswig_SOURCES =	CParse/cscanner.c		\
 		Modules/octave.cxx		\
 		Modules/overload.cxx		\
 		Modules/perl5.cxx		\
+		Modules/pharo.cxx		\
 		Modules/php.cxx			\
 		Modules/pike.cxx		\
 		Modules/python.cxx		\
