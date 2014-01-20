@@ -283,3 +283,91 @@
     SWIGTYPE (CLASS::*)
     ""
 
+/* Typemaps for code generation in proxy classes and Pharo type wrapper classes */
+
+/* The nbin typemap is used for converting function parameter types from the type 
+ * used in the proxy, module or type wrapper class to the type used in the PInvoke class. */
+%typemap(nbin)   bool,               const bool &,
+                 char,               const char &,
+                 signed char,        const signed char &,
+                 unsigned char,      const unsigned char &,
+                 short,              const short &,
+                 unsigned short,     const unsigned short &,
+                 int,                const int &,
+                 unsigned int,       const unsigned int &,
+                 long,               const long &,
+                 unsigned long,      const unsigned long &,
+                 long long,          const long long &,
+                 unsigned long long, const unsigned long long &,
+                 float,              const float &,
+                 double,             const double &
+    "$nbinput"
+%typemap(nbin) char *, char *&, char[ANY], char[] "$nbinput"
+%typemap(nbin) SWIGTYPE "($&nbclassname getCPtr: $nbinput)"
+%typemap(nbin) SWIGTYPE *, SWIGTYPE &, SWIGTYPE &&, SWIGTYPE [] "($nbclassname getCPtr: $nbinput)"
+%typemap(nbin) SWIGTYPE (CLASS::*) "($nbclassname getCMemberPtr: $nbinput)"
+
+/* The nbout typemap is used for converting function return types from the return type
+ * used in the PInvoke class to the type returned by the proxy, module or type wrapper class.
+ * The $excode special variable is replaced by the excode typemap attribute code if the
+ * method can throw any exceptions from unmanaged code, otherwise replaced by nothing. */
+
+// Macro used by the $excode special variable
+%define SWIGEXCODE "\n    $imclassname throwPendingException." %enddef
+%define SWIGEXCODE2 "\n      $imclassname throwPendingException." %enddef
+
+%typemap(nbout, excode=SWIGEXCODE)
+    bool, const bool &,
+    char, const char &,
+    signed char, const signed char &,
+    unsigned char, const unsigned char &,
+    short, const short &,
+    unsigned short, const unsigned short &,
+    int, const int &,
+    unsigned int, const unsigned int &,
+    long, const long &,
+    unsigned long, const unsigned long &,
+    long long, const long long &,
+    unsigned long long, const unsigned long long &,
+    float, const float &,
+    double, const double & %{
+    | ret |
+    ret := $imcall.$excode
+    ^ ret.
+  %}
+
+%typemap(nbout, excode=SWIGEXCODE) void %{
+    $imcall.$excode
+  %}
+
+%typemap(nbout, excode=SWIGEXCODE) SWIGTYPE %{
+    | ret |
+    ret := $&nbclassname newPtr: $imcall owned: true.$excode
+    ^ ret
+  %}
+
+%typemap(nbout, excode=SWIGEXCODE) SWIGTYPE & %{
+    | ret |
+    ret := $&nbclassname newPtr: $imcall owned: $owner.$excode
+    ^ ret
+  %}
+
+%typemap(nbout, excode=SWIGEXCODE) SWIGTYPE && %{
+    | ret |
+    ret := $&nbclassname newPtr: $imcall owned: $owner.$excode
+    ^ ret
+  %}
+
+%typemap(nbout, excode=SWIGEXCODE) SWIGTYPE *, SWIGTYPE [] %{
+    | ret |
+    ret := $&nbclassname newPtr: $imcall owned: $owner.$excode
+    ^ ret
+  %}
+
+%typemap(nbout, excode=SWIGEXCODE) SWIGTYPE (CLASS::*) %{
+    | ret |
+    string cMemberPtr = $imcall;
+    $nbclassname ret = (cMemberPtr == null) ? null : new $nbclassname(cMemberPtr, $owner);$excode
+    return ret;
+  %}
+
