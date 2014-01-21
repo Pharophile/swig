@@ -55,6 +55,8 @@ class PHARO : public Language {
   String *libname;
   String *imclass_name;    // intermediary class name
   String *module_class_name;  // module class name
+  String *module_class_constants;
+  String *module_class_constants_code;
   String *variable_name;
   String *proxy_class_name;
   String *proxy_class_constants;
@@ -93,6 +95,8 @@ public:
       libname(NULL),
       imclass_name(NULL),
       module_class_name(NULL),
+      module_class_constants(NULL),
+      module_class_constants_code(NULL),
       variable_name(NULL),
       proxy_class_name(NULL),
       proxy_class_constants(NULL),
@@ -214,6 +218,10 @@ public:
         module_class_name = Copy(Getattr(n, "name"));
     }
 
+    // Create strings for the module.
+    module_class_constants_code = NewString("");
+    module_class_constants = NewString("");
+
     /* Ensure there's a category */
     if(!category)
       category = Copy(Getattr(n, "name"));
@@ -224,12 +232,6 @@ public:
 
     /* Declare the intermediate class */
     subclass(object_string, imclass_name,
-             /*instanceVariables:*/ empty_string,
-             /*classVariables:*/ empty_string,
-             /*poolDictionary:*/ empty_string, category);
-
-    /* Declare the module class. */
-    subclass(object_string, module_class_name,
              /*instanceVariables:*/ empty_string,
              /*classVariables:*/ empty_string,
              /*poolDictionary:*/ empty_string, category);
@@ -253,6 +255,13 @@ public:
     Printf(f_wrappers, "}\n");
     Printf(f_wrappers, "#endif\n");
 
+    /* Finish the module class */
+    subclass(object_string, module_class_name,
+             /*instanceVariables:*/ empty_string,
+             /*classVariables:*/ module_class_constants,
+             /*poolDictionary:*/ empty_string, category);
+    emitModuleInitialize();
+
     /* Write Smalltalk code to th file */
     Dump(f_class_declarations, f_fileout);
     Dump(f_class_methods, f_fileout);
@@ -272,6 +281,8 @@ public:
     Delete(category);
     Delete(imclass_name);
     Delete(module_class_name);
+    Delete(module_class_constants_code);
+    Delete(module_class_constants);
 
     /* Cleanup files */
     Delete(f_runtime);
@@ -285,6 +296,20 @@ public:
     Delete(f_fileout);
 
     return SWIG_OK;
+  }
+
+  void emitModuleInitialize() {
+    const char *header =
+"initialize\n\
+\"\n\
+\tself initialize\n\
+\"\n\
+";
+
+    String *initialize_code = NewString("");
+    Printv(initialize_code, header, module_class_constants_code, NIL);
+    methodForClass(module_class_name, swig_wrapper_category, initialize_code);
+    Delete(initialize_code);
   }
 
   virtual int nativeWrapper(Node *n) {
@@ -854,7 +879,7 @@ public:
 
   virtual int classHandler(Node *n) {
 
-    String *nspace = getNSpace();
+    String *nspace = Getattr(n, "sym:nspace");
     // Save class local variables
     String *old_proxy_class_name = proxy_class_name;
     String *old_destructor_call = destructor_call;
@@ -897,8 +922,6 @@ public:
     Language::classHandler(n);
 
     if (proxy_flag) {
-      emitProxyClassDefAndCPPCasts(n);
-
       String *nbclazzname = proxy_class_name; // mangled full proxy class name
 
       Replaceall(proxy_class_constants_code, "$nbclassname", proxy_class_name);
@@ -906,10 +929,7 @@ public:
       Replaceall(proxy_class_constants_code, "$module", module_class_name);
       Replaceall(proxy_class_constants_code, "$imclassname", imclass_name);
 
-      // Write out all the constants
-      if (Len(proxy_class_constants_code) != 0) {
-        // TODO: Write the constants
-      }
+      emitProxyClassDefAndCPPCasts(n);
 
       Delete(proxy_class_name);
       proxy_class_name = old_proxy_class_name;
@@ -1437,6 +1457,11 @@ public:
       Printf(proxy_class_instance_variables, "%sswigCPtr swigCMemOwn",
              Len(proxy_class_instance_variables) > 0 ? " " : "");
 
+    // Add the constants
+    if(Len(proxy_class_constants) != 0) {
+      Printv(proxy_class_variables, Len(proxy_class_variables) > 0 ? " " : "", proxy_class_constants, NIL);
+    }
+
     // Use a custom category
     const String *custom_category = typemapLookup(n, "nbcategory", typemap_lookup_type, WARN_NONE);
     
@@ -1476,6 +1501,21 @@ public:
 
     //initWithCPtr:owner:
     emitTypeMappedMethod(n, "nbinitwith_owner", "nbinitwith_owner_derived", derived, false);
+
+    // Make the class initialize method.
+    String *initialize_body = NewString("");
+    Printv(initialize_body, proxy_class_constants_code, NIL);
+    if(Len(initialize_body) > 0) {
+      // Add the class initialize.
+      String *initialize_code = NewString("initialize\n");
+      Printv(initialize_code, initialize_body, NIL);
+      methodForClass(proxy_class_name, swig_wrapper_category, initialize_code);
+      Delete(initialize_code);
+
+      // Add a call to the class initialize from the module class.
+      Printf(module_class_constants_code, "\t%s initialize.\n", proxy_class_name);
+    }
+    Delete(initialize_body);
   }
 
   void emitTypeMappedMethod(Node *n, const char *typemapName, const char *derivedTypemapName, bool derived, bool classSide) {
@@ -1525,6 +1565,116 @@ public:
     if (!typemap_attributes)
       Delete(node);
     return tm;
+  }
+
+  /* -----------------------------------------------------------------------
+   * constantWrapper()
+   * Used for wrapping constants - #define or %constant.
+   * Also for inline initialised const static primitive type member variables (short, int, double, enums etc).
+   * Pharo class variables constants and accessors.
+   * If the %nbconst(1) feature is used then the C constant value is used to initialise the C# const variable.
+   * If not, a PINVOKE method is generated to get the C constant value for initialisation of the C# const variable.
+   * However, if the %nbconstvalue feature is used, it overrides all other ways to generate the initialisation.
+   * Also note that this method might be called for wrapping enum items (when the enum is using %nbconst(0)).
+   * ------------------------------------------------------------------------ */
+
+  virtual int constantWrapper(Node *n) {
+    String *symname = Getattr(n, "sym:name");
+    SwigType *t = Getattr(n, "type");
+    String *constants_code = NewString("");
+    String *accessor_code = NewString("");
+    Swig_save("constantWrapper", n, "value", NIL);
+    Swig_save("constantWrapper", n, "tmap:ctype:out", "tmap:imtype:out", "tmap:out:null", NIL);
+
+    bool is_enum_item = (Cmp(nodeType(n), "enumitem") == 0);
+
+    const String *itemname = (proxy_flag && wrapping_member_flag) ? variable_name : symname;
+    if (!is_enum_item) {
+      String *scope = 0;
+      if (proxy_class_name) {
+        String *nspace = getNSpace();
+        scope = NewString("");
+        if (nspace)
+          Printf(scope, "%s.", nspace);
+        Printf(scope, "%s", proxy_class_name);
+      } else {
+        scope = Copy(module_class_name);
+      }
+      if (!addSymbol(itemname, n, scope))
+        return SWIG_ERROR;
+      Delete(scope);
+    }
+
+    // The %nbconst feature determines how the constant value is obtained
+    int const_feature_flag = GetFlag(n, "feature:nb:const");
+
+    /* Adjust the enum type for the Swig_typemap_lookup.
+     * We want the same jstype typemap for all the enum items so we use the enum type (parent node). */
+    if (is_enum_item) {
+      t = Getattr(parentNode(n), "enumtype");
+      Setattr(n, "type", t);
+    }
+
+    // Add the stripped quotes back in
+    String *new_value = NewString("");
+    if (SwigType_type(t) == T_STRING) {
+      Printf(new_value, "'%s'", Copy(Getattr(n, "value")));
+      Setattr(n, "value", new_value);
+    } else if (SwigType_type(t) == T_CHAR) {
+      Printf(new_value, "$%s ", Copy(Getattr(n, "value")));
+      Setattr(n, "value", new_value);
+    }
+
+    // Start making the constant code
+    Printf(constants_code, "\t%s := ", itemname);
+
+    // Check for the %nbconstvalue feature
+    String *value = Getattr(n, "feature:nb:constvalue");
+
+    if (value) {
+      Printf(constants_code, "%s.\n", value);
+    } else if (!const_feature_flag) {
+      Printf(constants_code, "%s %s.\n", imclass_name, Swig_name_get(getNSpace(), symname));
+
+      // Each constant and enum value is wrapped with a separate PInvoke function call
+      SetFlag(n, "feature:immutable");
+      enum_constant_flag = true;
+      variableWrapper(n);
+      enum_constant_flag = false;
+    } else {
+      // Alternative constant handling will use the C syntax to make a true Smalltalk constant and hope that it compiles as Smalltalk code
+      if (Getattr(n, "wrappedasconstant")) {
+        if (SwigType_type(t) == T_CHAR)
+          Printf(constants_code, "$%s.\n", Getattr(n, "staticmembervariableHandler:value"));
+        else
+          Printf(constants_code, "%s.\n", Getattr(n, "staticmembervariableHandler:value"));
+      } else {
+        Printf(constants_code, "%s.\n", Getattr(n, "value"));
+      }
+    }
+
+    // Emit the accessor code
+    Printf(accessor_code, "%s\n\t^ %s", itemname, itemname);
+
+    // Emit the generated code to appropriate place
+    // Enums only emit the intermediate and PINVOKE methods, so no proxy or module class wrapper methods needed
+    if (proxy_flag && wrapping_member_flag) {
+        Printv(proxy_class_constants, Len(proxy_class_constants) > 0 ? " " : "", itemname, NIL);
+        Printv(proxy_class_constants_code, constants_code, NIL);
+        methodForClass(proxy_class_name, swig_wrapper_category, accessor_code);
+    }
+    else {
+      Printv(module_class_constants, Len(module_class_constants) > 0 ? " " : "", itemname, NIL);
+      Printv(module_class_constants_code, constants_code, NIL);
+      methodForClass(module_class_name, swig_wrapper_category, accessor_code);
+    }
+
+    // Cleanup
+    Swig_restore(n);
+    Delete(accessor_code);
+    Delete(new_value);
+    Delete(constants_code);
+    return SWIG_OK;
   }
 
   /* -----------------------------------------------------------------------------
@@ -1833,6 +1983,9 @@ public:
     Delete(body);
   }
 
+  bool nestedClassesSupported() const {
+    return true;
+  }
 };
 
 extern "C" Language *
