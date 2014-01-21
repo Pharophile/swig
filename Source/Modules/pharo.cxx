@@ -322,7 +322,6 @@ public:
     String *cleanup = NewString("");
     String *outarg = NewString("");
     String *body = NewString("");
-    String *im_outattributes = 0;
     int num_arguments = 0;
     bool is_void_return;
     String *overloaded_name = getOverloadedName(n);
@@ -363,7 +362,6 @@ public:
       if (imtypeout)
         typeMap = imtypeout;
       Printf(im_return_type, "%s", typeMap);
-      im_outattributes = Getattr(n, "tmap:imtype:outattributes");
     } else {
       Swig_warning(WARN_CSHARP_TYPEMAP_CSTYPE_UNDEF, input_file, line_number, "No imtype typemap defined for %s\n", SwigType_str(type, 0));
     }
@@ -702,7 +700,6 @@ public:
     ParmList *params = Getattr(n, "parms");
     String *type_map;
     Parm *param;
-    Parm *last_parm = 0;
     int i;
     String *imcall = NewString("");
     String *function_code = NewString("");
@@ -750,7 +747,6 @@ public:
 
       SwigType *pt = Getattr(param, "type");
       String *param_type = NewString("");
-      last_parm = param;
 
       String *arg = makeParameterName(n, param, i, setter_flag);
       String *sel_name = makeSelectorName(n, param, i);
@@ -984,7 +980,6 @@ public:
     bool setter_flag = false;
     String *type_map;
     Parm *param;
-    Parm *last_parm = 0;
     int i;
 
     if (!proxy_flag)
@@ -1162,7 +1157,156 @@ public:
   }
 
   virtual int constructorHandler(Node *n) {
-    return Language::constructorHandler(n);
+    ParmList *l = Getattr(n, "parms");
+    String *tm;
+    Parm *p;
+    int i;
+
+    Language::constructorHandler(n);
+
+    // Wrappers not wanted for some methods where the parameters cannot be overloaded in C#
+    if (Getattr(n, "overload:ignore"))
+      return SWIG_OK;
+
+    if (proxy_flag) {
+      String *function_code = NewString("");
+      String *pre_code = NewString("");
+      String *post_code = NewString("");
+      String *terminator_code = NewString("");
+
+      String *overloaded_name = getOverloadedName(n);
+      String *mangled_overname = Swig_name_construct(getNSpace(), overloaded_name);
+      String *imcall = NewString("");
+
+      Printf(function_code, "new");
+      Printv(imcall, imclass_name, " ", mangled_overname, NIL);
+
+      /* Attach the non-standard typemaps to the parameter list */
+      Swig_typemap_attach_parms("in", l, NULL);
+      Swig_typemap_attach_parms("nbin", l, NULL);
+
+      emit_mark_varargs(l);
+
+      int gencomma = 0;
+
+      /* Output each parameter */
+      for (i = 0, p = l; p; i++) {
+
+        /* Ignored varargs */
+        if (checkAttribute(p, "varargs:ignore", "1")) {
+          p = nextSibling(p);
+          continue;
+        }
+
+        /* Ignored parameters */
+        if (checkAttribute(p, "tmap:in:numinputs", "0")) {
+          p = Getattr(p, "tmap:in:next");
+          continue;
+        }
+
+        SwigType *pt = Getattr(p, "type");
+
+        String *arg = makeParameterName(n, p, i, false);
+        String *sel_name = makeSelectorName(n, p, i);
+
+        if (gencomma) {
+          Printf(function_code, " %s: %s", sel_name, arg);
+          Printf(imcall, " nbarg%d: ", i + 1);
+        } else {
+          Printf(function_code, ": %s", arg);
+          Printf(imcall, "_nbarg%d: ", i + 1);
+        }
+
+        // Use typemaps to transform type used in Pharo wrapper function (in proxy class) to type used in NBCallout function (in intermediary class)
+        if ((tm = Getattr(p, "tmap:nbin"))) {
+          substituteClassname(pt, tm);
+          Replaceall(tm, "$nbinput", arg);
+          String *pre = Getattr(p, "tmap:nbin:pre");
+          if (pre) {
+            substituteClassname(pt, pre);
+            Replaceall(pre, "$nbinput", arg);
+            if (Len(pre_code) > 0)
+              Printf(pre_code, "\n");
+            Printv(pre_code, pre, NIL);
+          }
+          String *post = Getattr(p, "tmap:nbin:post");
+          if (post) {
+            substituteClassname(pt, post);
+            Replaceall(post, "$nbinput", arg);
+            if (Len(post_code) > 0)
+              Printf(post_code, "\n");
+            Printv(post_code, post, NIL);
+          }
+          String *terminator = Getattr(p, "tmap:nbin:terminator");
+          if (terminator) {
+            substituteClassname(pt, terminator);
+            Replaceall(terminator, "$nbinput", arg);
+            if (Len(terminator_code) > 0)
+              Insert(terminator_code, 0, "\n");
+            Insert(terminator_code, 0, terminator);
+          }
+          Printv(imcall, tm, NIL);
+        } else {
+          Swig_warning(WARN_CSHARP_TYPEMAP_CSIN_UNDEF, input_file, line_number, "No csin typemap defined for %s\n", SwigType_str(pt, 0));
+        }
+
+        ++gencomma;
+        Delete(arg);
+        Delete(sel_name);
+        p = Getattr(p, "tmap:in:next");
+      }
+
+      /* Insert the nbconstruct typemap, doing the replacement for $directorconnect, as needed */
+      Hash *attributes = NewHash();
+      String *construct_tm = Copy(typemapLookup(n, "nbconstruct", Getattr(n, "name"),
+                                                WARN_CSHARP_TYPEMAP_CSCONSTRUCT_UNDEF, attributes));
+      if (construct_tm)
+        Printv(function_code, " ", construct_tm, NIL);
+
+      excodeSubstitute(n, function_code, "nbconstruct", attributes);
+
+      // TODO: Implement this thing.
+      bool is_pre_code = Len(pre_code) > 0;
+      bool is_post_code = Len(post_code) > 0;
+      bool is_terminator_code = Len(terminator_code) > 0;
+      if (is_pre_code || is_post_code || is_terminator_code) {
+/*        if (is_pre_code) {
+          Printv(helper_code, pre_code, "\n", NIL);
+        }
+        if (is_post_code) {
+          Printf(helper_code, "    try {\n");
+          Printv(helper_code, "      return ", imcall, ";\n", NIL);
+          Printv(helper_code, "    } finally {\n", post_code, "\n    }", NIL);
+        } else {
+          Printv(helper_code, "    return ", imcall, ";", NIL);
+        }
+        if (is_terminator_code) {
+          Printv(helper_code, "\n", terminator_code, NIL);
+        }
+        Printf(helper_code, "\n  }\n");
+        String *helper_name = NewStringf("%s.SwigConstruct%s(%s)", proxy_class_name, proxy_class_name, helper_args);
+        String *im_outattributes = Getattr(n, "tmap:imtype:outattributes");
+        if (im_outattributes)
+          Printf(proxy_class_code, "  %s\n", im_outattributes);
+        Printv(proxy_class_code, helper_code, "\n", NIL);
+        Replaceall(function_code, "$imcall", helper_name);
+        Delete(helper_name);*/
+      } else {
+        Replaceall(function_code, "$imcall", imcall);
+      }
+
+      methodForClass(proxy_class_name, swig_wrapper_category, function_code);
+
+      Delete(pre_code);
+      Delete(post_code);
+      Delete(terminator_code);
+      Delete(construct_tm);
+      Delete(attributes);
+      Delete(overloaded_name);
+      Delete(imcall);
+    }
+
+    return SWIG_OK;
   }
 
   virtual int destructorHandler(Node *n) {
@@ -1191,8 +1335,6 @@ public:
 
   virtual int staticmembervariableHandler(Node *n) {
 
-    bool static_const_member_flag = (Getattr(n, "value") == 0);
-
     generate_property_declaration_flag = true;
     variable_name = Getattr(n, "sym:name");
     wrapping_member_flag = true;
@@ -1214,8 +1356,6 @@ public:
   }
 
   void emitProxyClassDefAndCPPCasts(Node *n) {
-    String *c_classname = SwigType_namestr(Getattr(n, "name"));
-    String *c_baseclass = NULL;
     String *baseclass = NULL;
     String *c_baseclassname = NULL;
     SwigType *typemap_lookup_type = Getattr(n, "classtypeobj");
@@ -1238,8 +1378,6 @@ public:
         if (base.item) {
           c_baseclassname = Getattr(base.item, "name");
           baseclass = Copy(getProxyName(c_baseclassname));
-          if (baseclass)
-            c_baseclass = SwigType_namestr(Getattr(base.item, "name"));
           base = Next(base);
           /* Warn about multiple inheritance for additional base class(es) */
           while (base.item) {

@@ -394,7 +394,12 @@
     ]
 %}
 
-/* Object construction helpers */
+/* Object construction */
+%typemap(nbconstruct) SWIGTYPE 
+%{
+    ^ self fromCPtr: ($imcall)
+%}
+
 %typemap(nbfromcptr_owner, selector="fromCPtr:owner") SWIGTYPE 
 %{fromCPtr: swigCPtr owner: swigOwner
     ^ self basicNew initWithCPtr: swigCPtr owner: swigOwner; yourself
