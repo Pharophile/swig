@@ -56,6 +56,14 @@ class PHARO : public Language {
   String *imclass_name;    // intermediary class name
   String *module_class_name;  // module class name
   String *variable_name;
+  String *proxy_class_name;
+  String *proxy_class_constants;
+  String *proxy_class_constants_code;
+  String *proxy_class_instance_variables;
+  String *proxy_class_variables;
+  String *proxy_class_pool_dictionaries;
+  String *destructor_call;
+
 public:
   PHARO()
     : empty_string(NewString("")),
@@ -85,7 +93,14 @@ public:
       libname(NULL),
       imclass_name(NULL),
       module_class_name(NULL),
-      variable_name(NULL) {
+      variable_name(NULL),
+      proxy_class_name(NULL),
+      proxy_class_constants(NULL),
+      proxy_class_constants_code(NULL),
+      proxy_class_instance_variables(NULL),
+      proxy_class_variables(NULL),
+      proxy_class_pool_dictionaries(NULL),
+      destructor_call(NULL) {
   }
 
   virtual void main(int argc, char *argv[]) {
@@ -268,6 +283,26 @@ public:
     Delete(f_class_declarations);
     Delete(f_class_methods);
     Delete(f_fileout);
+
+    return SWIG_OK;
+  }
+
+  virtual int nativeWrapper(Node *n) {
+    String *wrapname = Getattr(n, "wrap:name");
+
+    if (!addSymbol(wrapname, n, imclass_name))
+      return SWIG_ERROR;
+
+    if (Getattr(n, "type")) {
+      Swig_save("nativeWrapper", n, "name", NIL);
+      Setattr(n, "name", wrapname);
+      native_function_flag = true;
+      functionWrapper(n);
+      Swig_restore(n);
+      native_function_flag = false;
+    } else {
+      Swig_error(input_file, line_number, "No return type for %%native method %s.\n", Getattr(n, "wrap:name"));
+    }
 
     return SWIG_OK;
   }
@@ -604,6 +639,17 @@ public:
       moduleClassFunctionHandler(n);
     }
 
+    /* 
+     * Generate the proxy class properties for public member variables.
+     * Not for enums and constants.
+     */
+    if (proxy_flag && wrapping_member_flag && !enum_constant_flag) {
+      Setattr(n, "proxyfuncname", variable_name);
+      Setattr(n, "imfuncname", symname);
+
+      proxyClassFunctionHandler(n);
+    }
+
     /* Cleanup */
     Delete(c_return_type);
     Delete(im_body);
@@ -616,6 +662,11 @@ public:
     Delete(overloaded_name);
     DelWrapper(wrapper);
 
+    return SWIG_OK;
+  }
+
+  virtual int variableWrapper(Node *n) {
+    Language::variableWrapper(n);
     return SWIG_OK;
   }
 
@@ -701,7 +752,7 @@ public:
       String *param_type = NewString("");
       last_parm = param;
 
-      String *arg = makeParameterName(n, param, i);
+      String *arg = makeParameterName(n, param, i, setter_flag);
       String *sel_name = makeSelectorName(n, param, i);
 
       String *local_name = Getattr(param, "lname");
@@ -805,9 +856,542 @@ public:
     Delete(func_name);
   }
 
+  virtual int classHandler(Node *n) {
+
+    String *nspace = getNSpace();
+    // Save class local variables
+    String *old_proxy_class_name = proxy_class_name;
+    String *old_destructor_call = destructor_call;
+    String *old_proxy_class_constants_code = proxy_class_constants_code;
+    String *old_proxy_class_constants = proxy_class_constants;
+    String *old_proxy_class_instance_variables = proxy_class_instance_variables;
+    String *old_proxy_class_variables = proxy_class_variables;
+    String *old_proxy_class_pool_dictionaries = proxy_class_pool_dictionaries;
+
+    if (proxy_flag) {
+      proxy_class_name = NewString(Getattr(n, "sym:name"));
+      if (Node *outer = Getattr(n, "nested:outer")) {
+        String *outerClassesPrefix = Copy(Getattr(outer, "sym:name"));
+        for (outer = Getattr(outer, "nested:outer"); outer != 0; outer = Getattr(outer, "nested:outer")) {
+          Push(outerClassesPrefix, "_");
+          Push(outerClassesPrefix, Getattr(outer, "sym:name"));
+        }
+        String *fnspace = nspace ? NewStringf("%s_%s", nspace, outerClassesPrefix) : outerClassesPrefix;
+        Push(proxy_class_name, "_");
+        Push(proxy_class_name, fnspace);
+        if (!addSymbol(proxy_class_name, n))
+          return SWIG_ERROR;
+        if (nspace)
+          Delete(fnspace);
+        Delete(outerClassesPrefix);
+      }
+      else {
+        if (!addSymbol(proxy_class_name, n, nspace))
+          return SWIG_ERROR;
+      }
+
+      destructor_call = NewString("");
+      proxy_class_constants_code = NewString("");
+      proxy_class_constants = NewString("");
+      proxy_class_instance_variables = NewString("");
+      proxy_class_variables = NewString("");
+      proxy_class_pool_dictionaries = NewString("");
+    }
+
+    Language::classHandler(n);
+
+    if (proxy_flag) {
+      emitProxyClassDefAndCPPCasts(n);
+
+      String *nbclazzname = proxy_class_name; // mangled full proxy class name
+
+      Replaceall(proxy_class_constants_code, "$nbclassname", proxy_class_name);
+      Replaceall(proxy_class_constants_code, "$nbclazzname", nbclazzname);
+      Replaceall(proxy_class_constants_code, "$module", module_class_name);
+      Replaceall(proxy_class_constants_code, "$imclassname", imclass_name);
+
+      // Write out all the constants
+      if (Len(proxy_class_constants_code) != 0) {
+        // TODO: Write the constants
+      }
+
+      Delete(proxy_class_name);
+      proxy_class_name = old_proxy_class_name;
+      Delete(destructor_call);
+      destructor_call = old_destructor_call;
+      Delete(proxy_class_constants);
+      proxy_class_constants = old_proxy_class_constants;
+      Delete(proxy_class_constants_code);
+      proxy_class_constants_code = old_proxy_class_constants_code;
+      Delete(proxy_class_instance_variables);
+      proxy_class_instance_variables = old_proxy_class_instance_variables;
+      Delete(proxy_class_variables);
+      proxy_class_variables = old_proxy_class_variables;
+      Delete(proxy_class_pool_dictionaries);
+      proxy_class_pool_dictionaries = old_proxy_class_pool_dictionaries;
+    }
+    return SWIG_OK;
+  }
+
+  virtual int memberfunctionHandler(Node *n) {
+    Language::memberfunctionHandler(n);
+
+    if (proxy_flag) {
+      String *overloaded_name = getOverloadedName(n);
+      String *intermediary_function_name = Swig_name_member(getNSpace(), getClassPrefix(), overloaded_name);
+      Setattr(n, "proxyfuncname", Getattr(n, "sym:name"));
+      Setattr(n, "imfuncname", intermediary_function_name);
+      proxyClassFunctionHandler(n);
+      Delete(overloaded_name);
+    }
+    return SWIG_OK;
+  }
+
+  virtual int staticmemberfunctionHandler(Node *n) {
+
+    static_flag = true;
+    Language::staticmemberfunctionHandler(n);
+
+    if (proxy_flag) {
+      String *overloaded_name = getOverloadedName(n);
+      String *intermediary_function_name = Swig_name_member(getNSpace(), getClassPrefix(), overloaded_name);
+      Setattr(n, "proxyfuncname", Getattr(n, "sym:name"));
+      Setattr(n, "imfuncname", intermediary_function_name);
+      proxyClassFunctionHandler(n);
+      Delete(overloaded_name);
+    }
+    static_flag = false;
+
+    return SWIG_OK;
+  }
+
+  /* -----------------------------------------------------------------------------
+   * proxyClassFunctionHandler()
+   *
+   * Function called for creating a Pharo wrapper function around a c++ function in the 
+   * proxy class. Used for both static and non-static C++ class functions.
+   * C++ class static functions map to Pharo class side functions.
+   * Two extra attributes in the Node must be available. These are "proxyfuncname" - 
+   * the name of the C# class proxy function, which in turn will call "imfuncname" - 
+   * the intermediary (NBCallout) function name in the intermediary class.
+   * ----------------------------------------------------------------------------- */
+  void proxyClassFunctionHandler(Node *n) {
+
+    SwigType *type = Getattr(n, "type");
+    ParmList *params = Getattr(n, "parms");
+    String *intermediary_function_name = Getattr(n, "imfuncname");
+    String *proxy_function_name = Getattr(n, "proxyfuncname");
+    bool setter_flag = false;
+    String *type_map;
+    Parm *param;
+    Parm *last_parm = 0;
+    int i;
+
+    if (!proxy_flag)
+      return;
+
+    // Wrappers not wanted for some methods where the parameters cannot be overloaded in C#
+    if (Getattr(n, "overload:ignore"))
+      return;
+
+    // Don't generate proxy method for additional explicitcall method used in directors
+    if (GetFlag(n, "explicitcall"))
+      return;
+
+    if (params) {
+      if (SwigType_type(Getattr(params, "type")) == T_VOID) {
+        params = nextSibling(params);
+      }
+    }
+
+    String *imcall = NewString("");
+    String *function_code = NewString("");
+
+    String *pre_code = NewString("");
+    String *post_code = NewString("");
+    String *terminator_code = NewString("");
+
+    /* Attach the non-standard typemaps to the parameter list */
+    Swig_typemap_attach_parms("in", params, NULL);
+    Swig_typemap_attach_parms("nbin", params, NULL);
+
+    /* Check for setter */
+    if (wrapping_member_flag && !enum_constant_flag)
+      setter_flag = (Cmp(Getattr(n, "sym:name"), Swig_name_set(getNSpace(), Swig_name_member(0, getClassPrefix(), variable_name))) == 0);
+
+    // Start generating the proxy function
+    Printf(function_code, "%s", proxy_function_name);
+
+    Printv(imcall, imclass_name, " $imfuncname", NIL);
+    if (!static_flag)
+      Printf(imcall, "_nbarg1: swigCPtr");
+
+    emit_mark_varargs(params);
+
+    int gencomma = !static_flag;
+    int start_count = static_flag ? 1 : 2;
+    if(variable_wrapper_flag)
+      --start_count;
+    int gensel = 0;
+
+    /* Output each parameter */
+    for (i = 0, param = params; param; i++) {
+
+      /* Ignored varargs */
+      if (checkAttribute(param, "varargs:ignore", "1")) {
+        param = nextSibling(param);
+        continue;
+      }
+
+      /* Ignored parameters */
+      if (checkAttribute(param, "tmap:in:numinputs", "0")) {
+        param = Getattr(param, "tmap:in:next");
+        continue;
+      }
+
+      /* Ignore the 'this' argument for variable wrappers */
+      if (!(variable_wrapper_flag && i == 0)) {
+        SwigType *pt = Getattr(param, "type");
+        String *param_type = NewString("");
+
+        // Add parameter to the call
+        if (gencomma) {
+          Printf(imcall, " nbarg%d: ", i + start_count);
+        } else {
+          Printf(imcall, "_nbarg%d: ", i + start_count);
+        }
+
+        // Add selector part.
+        String *sel_name = makeSelectorName(n, param, i);
+        String *arg = makeParameterName(n, param, i, setter_flag);
+        if(gensel) {
+          Printf(function_code, "%s: %s", sel_name, arg);
+        } else {
+          Printf(function_code, ": %s", arg);
+        }
+        gensel = 1;
+
+        // Use typemaps to transform type used in C# wrapper function (in proxy class) to type used in PInvoke function (in intermediary class)
+        if ((type_map = Getattr(param, "tmap:nbin"))) {
+          substituteClassname(pt, type_map);
+          Replaceall(type_map, "$nbinput", arg);
+          String *pre = Getattr(param, "tmap:nbin:pre");
+          if (pre) {
+            substituteClassname(pt, pre);
+            Replaceall(pre, "$nbinput", arg);
+            if (Len(pre_code) > 0)
+              Printf(pre_code, "\n");
+            Printv(pre_code, pre, NIL);
+          }
+          String *post = Getattr(param, "tmap:nbin:post");
+          if (post) {
+            substituteClassname(pt, post);
+            Replaceall(post, "$nbinput", arg);
+            if (Len(post_code) > 0)
+              Printf(post_code, "\n");
+            Printv(post_code, post, NIL);
+          }
+          String *terminator = Getattr(param, "tmap:nbin:terminator");
+          if (terminator) {
+            substituteClassname(pt, terminator);
+            Replaceall(terminator, "$nbinput", arg);
+            if (Len(terminator_code) > 0)
+              Insert(terminator_code, 0, "\n");
+            Insert(terminator_code, 0, terminator);
+          }
+          Printv(imcall, type_map, NIL);
+        } else {
+          Swig_warning(WARN_CSHARP_TYPEMAP_CSIN_UNDEF, input_file, line_number, "No csin typemap defined for %s\n", SwigType_str(pt, 0));
+        }
+
+        Delete(arg);
+        Delete(sel_name);
+        Delete(param_type);
+      }
+      param = Getattr(param, "tmap:in:next");
+    }
+
+    // Transform return type used in PInvoke function (in intermediary class) to type used in C# wrapper function (in proxy class)
+    if ((type_map = Swig_typemap_lookup("nbout", n, "", 0))) {
+      excodeSubstitute(n, type_map, "nbout", n);
+      bool is_pre_code = Len(pre_code) > 0;
+      bool is_post_code = Len(post_code) > 0;
+      bool is_terminator_code = Len(terminator_code) > 0;
+      if (is_pre_code || is_post_code || is_terminator_code) {
+        /* TODO: Fix this broken part. */
+        Replaceall(type_map, "\n ", "\n   "); // add extra indentation to code in typemap
+        if (is_post_code) {
+          Insert(type_map, 0, "\n    [ ");
+          Printv(type_map, " ensure: [\n", post_code, "\n    ]", NIL);
+        } else {
+          Insert(type_map, 0, "\n    ");
+        }
+        if (is_pre_code) {
+          Insert(type_map, 0, pre_code);
+          Insert(type_map, 0, "\n");
+        }
+        if (is_terminator_code) {
+          Printv(type_map, "\n", terminator_code, NIL);
+        }
+        Insert(type_map, 0, "[");
+        Printf(type_map, "\n  ]");
+      }
+      if (GetFlag(n, "feature:new"))
+        Replaceall(type_map, "$owner", "true");
+      else
+        Replaceall(type_map, "$owner", "false");
+      substituteClassname(type, type_map);
+      Replaceall(imcall, "$imfuncname", intermediary_function_name);
+      Replaceall(type_map, "$imcall", imcall);
+    } else {
+      Swig_warning(WARN_CSHARP_TYPEMAP_CSOUT_UNDEF, input_file, line_number, "No csout typemap defined for %s\n", SwigType_str(type, 0));
+    }
+
+    // Normal function call
+    Printf(function_code, "%s", type_map ? (const String *) type_map : empty_string);
+    if(static_flag)
+      methodForClass(proxy_class_name, swig_wrapper_category, function_code);
+    else
+      methodFor(proxy_class_name, swig_wrapper_category, function_code);
+
+    Delete(pre_code);
+    Delete(post_code);
+    Delete(terminator_code);
+    Delete(function_code);
+    Delete(imcall);
+  }
+
+  virtual int constructorHandler(Node *n) {
+    return Language::constructorHandler(n);
+  }
+
+  virtual int destructorHandler(Node *n) {
+    Language::destructorHandler(n);
+    String *symname = Getattr(n, "sym:name");
+
+    if (proxy_flag) {
+      Printv(destructor_call, imclass_name, " ", Swig_name_destroy(getNSpace(), symname), "_nbarg1: swigCPtr", NIL);
+    }
+    return SWIG_OK;
+  }
+
+  virtual int membervariableHandler(Node *n) {
+
+    generate_property_declaration_flag = true;
+    variable_name = Getattr(n, "sym:name");
+    wrapping_member_flag = true;
+    variable_wrapper_flag = true;
+    Language::membervariableHandler(n);
+    wrapping_member_flag = false;
+    variable_wrapper_flag = false;
+    generate_property_declaration_flag = false;
+
+    return SWIG_OK;
+  }
+
+  virtual int staticmembervariableHandler(Node *n) {
+
+    bool static_const_member_flag = (Getattr(n, "value") == 0);
+
+    generate_property_declaration_flag = true;
+    variable_name = Getattr(n, "sym:name");
+    wrapping_member_flag = true;
+    static_flag = true;
+    Language::staticmembervariableHandler(n);
+    wrapping_member_flag = false;
+    static_flag = false;
+    generate_property_declaration_flag = false;
+
+    return SWIG_OK;
+  }
+
+  virtual int memberconstantHandler(Node *n) {
+    variable_name = Getattr(n, "sym:name");
+    wrapping_member_flag = true;
+    Language::memberconstantHandler(n);
+    wrapping_member_flag = false;
+    return SWIG_OK;
+  }
+
+  void emitProxyClassDefAndCPPCasts(Node *n) {
+    String *c_classname = SwigType_namestr(Getattr(n, "name"));
+    String *c_baseclass = NULL;
+    String *baseclass = NULL;
+    String *c_baseclassname = NULL;
+    SwigType *typemap_lookup_type = Getattr(n, "classtypeobj");
+
+    // Inheritance from pure Smalltalk classes
+    Node *attributes = NewHash();
+    const String *pure_baseclass = typemapLookup(n, "nbbase", typemap_lookup_type, WARN_NONE, attributes);
+    bool purebase_replace = GetFlag(attributes, "tmap:nbbase:replace") ? true : false;
+    bool purebase_notderived = GetFlag(attributes, "tmap:nbbase:notderived") ? true : false;
+    Delete(attributes);
+
+    // C++ inheritance
+    if (!purebase_replace) {
+      List *baselist = Getattr(n, "bases");
+      if (baselist) {
+        Iterator base = First(baselist);
+        while (base.item && GetFlag(base.item, "feature:ignore")) {
+          base = Next(base);
+        }
+        if (base.item) {
+          c_baseclassname = Getattr(base.item, "name");
+          baseclass = Copy(getProxyName(c_baseclassname));
+          if (baseclass)
+            c_baseclass = SwigType_namestr(Getattr(base.item, "name"));
+          base = Next(base);
+          /* Warn about multiple inheritance for additional base class(es) */
+          while (base.item) {
+            if (GetFlag(base.item, "feature:ignore")) {
+              base = Next(base);
+              continue;
+            }
+            String *proxyclassname = Getattr(n, "classtypeobj");
+            String *baseclassname = Getattr(base.item, "name");
+            Swig_warning(WARN_CSHARP_MULTIPLE_INHERITANCE, Getfile(n), Getline(n),
+                         "Warning for %s proxy: Base %s ignored. Multiple inheritance is not supported in Java.\n", SwigType_namestr(proxyclassname), SwigType_namestr(baseclassname));
+            base = Next(base);
+          }
+        }
+      }
+    }
+
+    bool derived = baseclass && getProxyName(c_baseclassname);
+    if (derived && purebase_notderived)
+      pure_baseclass = empty_string;
+    const String *wanted_base = baseclass ? baseclass : pure_baseclass;
+
+    if (purebase_replace) {
+      wanted_base = pure_baseclass;
+      derived = false;
+      Delete(baseclass);
+      baseclass = NULL;
+      if (purebase_notderived)
+        Swig_error(Getfile(n), Getline(n), "The nbbase typemap for proxy %s must contain just one of the 'replace' or 'notderived' attributes.\n", typemap_lookup_type);
+    } else if (Len(pure_baseclass) > 0 && Len(baseclass) > 0) {
+      Swig_warning(WARN_CSHARP_MULTIPLE_INHERITANCE, Getfile(n), Getline(n),
+                   "Warning for %s proxy: Base %s ignored. Multiple inheritance is not supported in C#. "
+                   "Perhaps you need one of the 'replace' or 'notderived' attributes in the csbase typemap?\n", typemap_lookup_type, pure_baseclass);
+    }
+
+    // Use by default Object as a base.
+    if(!wanted_base || !Len(wanted_base))
+      wanted_base = object_string;
+
+    // Add extra instance variables.
+    const String *extra_inst_vars = typemapLookup(n, "nbinstvars", typemap_lookup_type, WARN_NONE);
+    if(extra_inst_vars)
+      Printf(proxy_class_instance_variables, "%s%s", Len(proxy_class_instance_variables) > 0 ? " " : "", extra_inst_vars);
+
+    // Add extra class variables.
+    const String *extra_class_vars = typemapLookup(n, "nbclassvars", typemap_lookup_type, WARN_NONE);
+    if(extra_class_vars)
+      Printf(proxy_class_variables, "%s%s", Len(proxy_class_variables) > 0 ? " " : "", extra_class_vars);
+
+    // Add extra pool dictionaries
+    const String *extra_pools = typemapLookup(n, "nbpools", typemap_lookup_type, WARN_NONE);
+    if(extra_pools)
+      Printf(proxy_class_pool_dictionaries, "%s%s", Len(proxy_class_pool_dictionaries) > 0 ? " " : "", extra_pools);
+
+    // Add the swigCPtr and swigOwner instance variables.
+    if(!derived)
+      Printf(proxy_class_instance_variables, "%sswigCPtr swigCMemOwn",
+             Len(proxy_class_instance_variables) > 0 ? " " : "");
+
+    // Use a custom category
+    const String *custom_category = typemapLookup(n, "nbcategory", typemap_lookup_type, WARN_NONE);
+    
+    // Write the class
+    subclass(wanted_base, proxy_class_name,
+             proxy_class_instance_variables,
+             proxy_class_variables,
+             proxy_class_pool_dictionaries, Len(custom_category) > 0 ? custom_category : category);
+
+    // destroy method
+    const String *type_map;
+    if (derived) {
+      type_map = typemapLookup(n, "nbdestroy_derived", typemap_lookup_type, WARN_NONE);
+    } else {
+      type_map = typemapLookup(n, "nbdestroy", typemap_lookup_type, WARN_NONE);
+    }
+
+    if(Len(type_map) > 0) {
+      String *destroy_code = Copy(type_map);
+      if(Len(destructor_call))
+        Replaceall(destroy_code, "$imcall", destructor_call);
+      else
+        Replaceall(destroy_code, "$imcall", "self error: 'C++ destructor does not have public access'.");
+
+      methodFor(proxy_class_name, swig_wrapper_category, destroy_code);
+      Delete(destroy_code);
+    }
+
+    // finalize method
+    emitTypeMappedMethod(n, "nbfinalize", "nbfinalize_derived", derived, false);
+
+    // fromCPtr:owner
+    emitTypeMappedMethod(n, "nbfromcptr_owner", "nbfromcptr_owner_derived", derived, true);
+
+    // fromCPtr:
+    emitTypeMappedMethod(n, "nbfromcptr", "nbfromcptr_derived", derived, true);
+
+    //initWithCPtr:owner:
+    emitTypeMappedMethod(n, "nbinitwith_owner", "nbinitwith_owner_derived", derived, false);
+  }
+
+  void emitTypeMappedMethod(Node *n, const char *typemapName, const char *derivedTypemapName, bool derived, bool classSide) {
+    SwigType *typemap_lookup_type = Getattr(n, "classtypeobj");
+
+    // Select the adequate typemap.
+    const String *type_map;
+    if (derived) {
+      type_map = typemapLookup(n, derivedTypemapName, typemap_lookup_type, WARN_NONE);
+    } else {
+      type_map = typemapLookup(n, typemapName, typemap_lookup_type, WARN_NONE);
+    }
+
+    // Emit the type map code.
+    if(Len(type_map) > 0) {
+      String *code = Copy(type_map);
+      if(classSide)
+        methodForClass(proxy_class_name, swig_wrapper_category, code);
+      else
+        methodFor(proxy_class_name, swig_wrapper_category, code);
+      Delete(code);
+    }
+  }
+
+  /* -----------------------------------------------------------------------------
+   * typemapLookup()
+   * n - for input only and must contain info for Getfile(n) and Getline(n) to work
+   * tmap_method - typemap method name
+   * type - typemap type to lookup
+   * warning - warning number to issue if no typemaps found
+   * typemap_attributes - the typemap attributes are attached to this node and will 
+   *   also be used for temporary storage if non null
+   * return is never NULL, unlike Swig_typemap_lookup()
+   * ----------------------------------------------------------------------------- */
+
+  const String *typemapLookup(Node *n, const_String_or_char_ptr tmap_method, SwigType *type, int warning, Node *typemap_attributes = 0) {
+    Node *node = !typemap_attributes ? NewHash() : typemap_attributes;
+    Setattr(node, "type", type);
+    Setfile(node, Getfile(n));
+    Setline(node, Getline(n));
+    const String *tm = Swig_typemap_lookup(tmap_method, node, "", 0);
+    if (!tm) {
+      tm = empty_string;
+      if (warning != WARN_NONE)
+        Swig_warning(warning, Getfile(n), Getline(n), "No %s typemap defined for %s\n", tmap_method, SwigType_str(type, 0));
+    }
+    if (!typemap_attributes)
+      Delete(node);
+    return tm;
+  }
+
   /* -----------------------------------------------------------------------------
    * excodeSubstitute()
-   * If a method can throw a C# exception, additional exception code is added to
+   * If a method can throw a Pharo error, additional exception code is added to
    * check for the pending exception so that it can then throw the exception. The
    * $excode special variable is replaced by the exception code in the excode
    * typemap attribute.
@@ -819,8 +1403,8 @@ public:
     if (Getattr(n, "pharo:canthrow")) {
       int count = Replaceall(code, "$excode", excode);
       if (count < 1 || !excode) {
-	Swig_warning(WARN_CSHARP_EXCODE, input_file, line_number,
-		     "Pharo exception may not be thrown - no $excode or excode attribute in '%s' typemap.\n", typemap);
+        Swig_warning(WARN_CSHARP_EXCODE, input_file, line_number,
+                     "Pharo exception may not be thrown - no $excode or excode attribute in '%s' typemap.\n", typemap);
       }
     } else {
       Replaceall(code, "$excode", empty_string);
@@ -984,7 +1568,7 @@ public:
    * Return:
    *   arg - a unique parameter name
    * ----------------------------------------------------------------------------- */
-  String *makeParameterName(Node *n, Parm *p, int arg_num) {
+  String *makeParameterName(Node *n, Parm *p, int arg_num, bool setter_flag) {
 
     String *arg = 0;
     String *pn = Getattr(p, "name");
@@ -1003,6 +1587,10 @@ public:
     if (Cmp(arg, "self") == 0) {
       Delete(arg);      
       arg = NewString("this");
+    } else if(setter_flag) {
+      /* Use a special for setter arguments, to avoid name clashes. */
+      Delete(arg);      
+      arg = NewString("swigNewValue");
     }
 
     return arg;

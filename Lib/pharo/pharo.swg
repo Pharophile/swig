@@ -342,32 +342,72 @@
 
 %typemap(nbout, excode=SWIGEXCODE) SWIGTYPE %{
     | ret |
-    ret := $&nbclassname newPtr: $imcall owned: true.$excode
+    ret := $&nbclassname newPtr: ($imcall) owned: true.$excode
     ^ ret
   %}
 
 %typemap(nbout, excode=SWIGEXCODE) SWIGTYPE & %{
     | ret |
-    ret := $&nbclassname newPtr: $imcall owned: $owner.$excode
+    ret := $&nbclassname newPtr: ($imcall) owned: $owner.$excode
     ^ ret
   %}
 
 %typemap(nbout, excode=SWIGEXCODE) SWIGTYPE && %{
     | ret |
-    ret := $&nbclassname newPtr: $imcall owned: $owner.$excode
+    ret := $&nbclassname newPtr: ($imcall) owned: $owner.$excode
     ^ ret
   %}
 
 %typemap(nbout, excode=SWIGEXCODE) SWIGTYPE *, SWIGTYPE [] %{
     | ret |
-    ret := $&nbclassname newPtr: $imcall owned: $owner.$excode
+    ret := $&nbclassname newPtr: ($imcall) owned: $owner.$excode
     ^ ret
   %}
 
 %typemap(nbout, excode=SWIGEXCODE) SWIGTYPE (CLASS::*) %{
-    | ret |
-    string cMemberPtr = $imcall;
-    $nbclassname ret = (cMemberPtr == null) ? null : new $nbclassname(cMemberPtr, $owner);$excode
-    return ret;
+    | ret cMemberPtr |
+    string cMemberPtr := $imcall;
+    $nbclassname ret := (cMemberPtr == null) ? null : new $nbclassname(cMemberPtr, $owner);$excode
+    ^ ret
   %}
+
+/* Typemaps used for the generation of proxy and type wrapper class code */
+%typemap(nbbase)        SWIGTYPE, SWIGTYPE *, SWIGTYPE &, SWIGTYPE &&, SWIGTYPE [], SWIGTYPE (CLASS::*) ""
+%typemap(nbinstvars)    SWIGTYPE, SWIGTYPE *, SWIGTYPE &, SWIGTYPE &&, SWIGTYPE [], SWIGTYPE (CLASS::*) ""
+%typemap(nbclassvars)   SWIGTYPE, SWIGTYPE *, SWIGTYPE &, SWIGTYPE &&, SWIGTYPE [], SWIGTYPE (CLASS::*) ""
+%typemap(nbpools)        SWIGTYPE, SWIGTYPE *, SWIGTYPE &, SWIGTYPE &&, SWIGTYPE [], SWIGTYPE (CLASS::*) ""
+%typemap(nbcategory)        SWIGTYPE, SWIGTYPE *, SWIGTYPE &, SWIGTYPE &&, SWIGTYPE [], SWIGTYPE (CLASS::*) ""
+
+%typemap(nbfinalize, selector="finalize") SWIGTYPE
+%{finalize
+    self destroy
+%}
+
+%typemap(nbdestroy, selector="destroy") SWIGTYPE 
+%{destroy
+    swigCPtr ~~ nil ifTrue: [
+        swigCMemOwn ifTrue: [
+            swigCMemOwn := false.
+            $imcall
+        ].
+        swigCPtr := nil
+    ]
+%}
+
+/* Object construction helpers */
+%typemap(nbfromcptr_owner, selector="fromCPtr:owner") SWIGTYPE 
+%{fromCPtr: swigCPtr owner: swigOwner
+    ^ self basicNew initWithCPtr: swigCPtr owner: swigOwner; yourself
+%}
+
+%typemap(nbfromcptr, selector="fromCPtr:") SWIGTYPE 
+%{fromCPtr: swigCPtr
+    ^ self fromCPtr: swigCPtr owner: true
+%}
+
+%typemap(nbinitwith_owner, selector="swigInitWithCPtr:owner:") SWIGTYPE 
+%{initWithCPtr: newSwigCPtr owner: newSwigCMemOwn
+    swigCPtr := newSwigCPtr.
+    swigCMemOwn := newSwigCMemOwn
+%}
 
