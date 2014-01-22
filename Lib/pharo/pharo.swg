@@ -418,7 +418,7 @@
 
 %typemap(nbvalidcptr, selector="swigValidCPtr") SWIGTYPE 
 %{swigValidCPtr
-    swigSession ~~ Smalltalk session or: [swigCPtr == nil]
+    (swigSession ~~ Smalltalk session or: [swigCPtr == nil])
         ifTrue: [ self error: 'trying to use an invalid swig wrapper.'].
     ^ swigCPtr
 %}
