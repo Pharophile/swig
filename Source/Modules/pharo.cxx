@@ -16,7 +16,7 @@ static void show_usage() {
   fprintf(stderr,
 "Pharo Options (available with -pharo)\n\
      -fileout <fo>   - Pharo code file out\n\
-     -libname <lb>   - Library to load symbols from\n\
+     -impname <in>   - Library to import symbols from\n\
 ");
 }
 
@@ -132,10 +132,10 @@ public:
           } else {
             Swig_arg_error();
           }
-        } else if(strcmp(argv[i], "-libname") == 0) {
+        } else if(strcmp(argv[i], "-impname") == 0) {
           if (argv[i + 1]) {
             libname = NewString("");
-            Printf(category, argv[i + 1]);
+            Printf(libname, argv[i + 1]);
             Swig_mark_arg(i);
             Swig_mark_arg(i + 1);
             i++;
@@ -267,6 +267,11 @@ public:
              /*classVariables:*/ module_class_constants,
              /*poolDictionary:*/ empty_string, category);
     emitModuleInitialize();
+
+    // Output a Smalltalk type wrapper class for each SWIG type
+    for (Iterator swig_type = First(swig_types_hash); swig_type.key; swig_type = Next(swig_type)) {
+      emitTypeWrapperClass(swig_type.key, swig_type.item);
+    }
 
     /* Write Smalltalk code to th file */
     Dump(f_class_declarations, f_fileout);
@@ -1460,7 +1465,7 @@ public:
 
     // Add the swigCPtr and swigOwner instance variables.
     if(!derived)
-      Printf(proxy_class_instance_variables, "%sswigCPtr swigCMemOwn",
+      Printf(proxy_class_instance_variables, "%sswigCPtr swigCMemOwn swigSession",
              Len(proxy_class_instance_variables) > 0 ? " " : "");
 
     // Add the constants
@@ -1508,6 +1513,9 @@ public:
     //initWithCPtr:owner:
     emitTypeMappedMethod(n, "nbinitwith_owner", "nbinitwith_owner_derived", derived, false);
 
+    //swigValidCPtr
+    emitTypeMappedMethod(n, "nbvalidcptr", "nbvalidcptr_derived", derived, false);
+
     // Make the class initialize method.
     String *initialize_body = NewString("");
     Printv(initialize_body, proxy_class_constants_code, NIL);
@@ -1524,7 +1532,7 @@ public:
     Delete(initialize_body);
   }
 
-  void emitTypeMappedMethod(Node *n, const char *typemapName, const char *derivedTypemapName, bool derived, bool classSide) {
+  void emitTypeMappedMethodFor(const String *className, Node *n, const char *typemapName, const char *derivedTypemapName, bool derived, bool classSide) {
     SwigType *typemap_lookup_type = Getattr(n, "classtypeobj");
 
     // Select the adequate typemap.
@@ -1539,11 +1547,15 @@ public:
     if(Len(type_map) > 0) {
       String *code = Copy(type_map);
       if(classSide)
-        methodForClass(proxy_class_name, swig_wrapper_category, code);
+        methodForClass(className, swig_wrapper_category, code);
       else
-        methodFor(proxy_class_name, swig_wrapper_category, code);
+        methodFor(className, swig_wrapper_category, code);
       Delete(code);
     }
+  }
+
+  void emitTypeMappedMethod(Node *n, const char *typemapName, const char *derivedTypemapName, bool derived, bool classSide){
+    emitTypeMappedMethodFor(proxy_class_name, n, typemapName, derivedTypemapName, derived, classSide);
   }
 
   /* -----------------------------------------------------------------------------
@@ -1579,7 +1591,7 @@ public:
    * Also for inline initialised const static primitive type member variables (short, int, double, enums etc).
    * Pharo class variables constants and accessors.
    * If the %nbconst(1) feature is used then the C constant value is used to initialise the C# const variable.
-   * If not, a PINVOKE method is generated to get the C constant value for initialisation of the C# const variable.
+   * If not, a NBCallout method is generated to get the C constant value for initialisation of the C# const variable.
    * However, if the %nbconstvalue feature is used, it overrides all other ways to generate the initialisation.
    * Also note that this method might be called for wrapping enum items (when the enum is using %nbconst(0)).
    * ------------------------------------------------------------------------ */
@@ -1624,15 +1636,15 @@ public:
     // Add the stripped quotes back in
     String *new_value = NewString("");
     if (SwigType_type(t) == T_STRING) {
-      Printf(new_value, "'%s'", Copy(Getattr(n, "value")));
+      Printf(new_value, "\"%s\"", Copy(Getattr(n, "value")));
       Setattr(n, "value", new_value);
     } else if (SwigType_type(t) == T_CHAR) {
-      Printf(new_value, "$%s ", Copy(Getattr(n, "value")));
+      Printf(new_value, "'%s'", Copy(Getattr(n, "value")));
       Setattr(n, "value", new_value);
     }
 
     // Start making the constant code
-    Printf(constants_code, "\t%s := ", itemname);
+    Printf(constants_code, "%s := ", itemname);
 
     // Check for the %nbconstvalue feature
     String *value = Getattr(n, "feature:nb:constvalue");
@@ -1660,18 +1672,19 @@ public:
     }
 
     // Emit the accessor code
-    Printf(accessor_code, "%s\n\t^ %s", itemname, itemname);
+    Printf(accessor_code, "%s\n\t%s ifNil: [ %s ].", itemname, itemname, constants_code);
+    Printf(accessor_code, "\n\t ^ %s", itemname);
 
     // Emit the generated code to appropriate place
     // Enums only emit the intermediate and PINVOKE methods, so no proxy or module class wrapper methods needed
     if (proxy_flag && wrapping_member_flag) {
         Printv(proxy_class_constants, Len(proxy_class_constants) > 0 ? " " : "", itemname, NIL);
-        Printv(proxy_class_constants_code, constants_code, NIL);
+        //Printv(proxy_class_constants_code, constants_code, NIL);
         methodForClass(proxy_class_name, swig_wrapper_category, accessor_code);
     }
     else {
       Printv(module_class_constants, Len(module_class_constants) > 0 ? " " : "", itemname, NIL);
-      Printv(module_class_constants_code, constants_code, NIL);
+      //Printv(module_class_constants_code, constants_code, NIL);
       methodForClass(module_class_name, swig_wrapper_category, accessor_code);
     }
 
@@ -1852,6 +1865,47 @@ public:
       }
     }
   }
+
+  void emitTypeWrapperClass(String *classname, SwigType *type) {
+    // Pure Smalltalk baseclass
+    Node *n = NewHash();
+    Setattr(n, "classtypeobj", type);
+
+    const String *pure_baseclass = typemapLookup(n, "nbbase", type, WARN_NONE);
+    bool derived = false;
+
+    // Emit the class
+    if(Len(pure_baseclass) == 0)
+      pure_baseclass = object_string;
+
+    // Add the swigCPtr and swigOwner instance variables.
+    String *instance_variables = NewString("swigCPtr swigCMemOwn swigSession");
+
+    // Use a custom category
+    const String *custom_category = typemapLookup(n, "nbcategory", type, WARN_NONE);
+    
+    // Write the class
+    subclass(pure_baseclass, classname,
+             instance_variables,
+             empty_string,
+             empty_string, Len(custom_category) > 0 ? custom_category : category);
+
+    // fromCPtr:owner
+    emitTypeMappedMethodFor(classname, n, "nbfromcptr_owner", "nbfromcptr_owner_derived", derived, true);
+
+    // fromCPtr:
+    emitTypeMappedMethodFor(classname, n, "nbfromcptr", "nbfromcptr_derived", derived, true);
+
+    //initWithCPtr:owner:
+    emitTypeMappedMethodFor(classname, n, "nbinitwith_owner", "nbinitwith_owner_derived", derived, false);
+
+    //swigValidCPtr
+    emitTypeMappedMethodFor(classname, n, "nbvalidcptr", "nbvalidcptr_derived", derived, false);
+
+    Delete(instance_variables);
+    Delete(n);
+  }
+
   /* -----------------------------------------------------------------------------
    * makeParameterName()
    *

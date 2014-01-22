@@ -43,6 +43,10 @@ static void SWIGUNUSED SWIG_PharoSetPendingException(SWIG_PharoExceptionCodes co
     SWIG_PharoPendingExceptionMsg = msg;
 }
 
+static void SWIGUNUSED SWIG_PharoSetPendingExceptionArgument(SWIG_PharoExceptionArgumentCodes code, const char *msg, const char *param_name) {
+    // TODO:
+}
+
 #ifdef __cplusplus
 extern "C" {
 #endif

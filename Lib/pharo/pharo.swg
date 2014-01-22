@@ -4,6 +4,8 @@
  * Pharo typemaps
  * ----------------------------------------------------------------------------- */
 
+%include <pharohead.swg>
+
 /* Primitive types */
 %typemap(ctype) bool,               const bool &               "unsigned int"
 %typemap(ctype) char,               const char &               "char"
@@ -286,7 +288,7 @@
 /* Typemaps for code generation in proxy classes and Pharo type wrapper classes */
 
 /* The nbin typemap is used for converting function parameter types from the type 
- * used in the proxy, module or type wrapper class to the type used in the PInvoke class. */
+ * used in the proxy, module or type wrapper class to the type used in the im class. */
 %typemap(nbin)   bool,               const bool &,
                  char,               const char &,
                  signed char,        const signed char &,
@@ -303,9 +305,9 @@
                  double,             const double &
     "$nbinput"
 %typemap(nbin) char *, char *&, char[ANY], char[] "$nbinput"
-%typemap(nbin) SWIGTYPE "($&nbclassname getCPtr: $nbinput)"
-%typemap(nbin) SWIGTYPE *, SWIGTYPE &, SWIGTYPE &&, SWIGTYPE [] "($nbclassname getCPtr: $nbinput)"
-%typemap(nbin) SWIGTYPE (CLASS::*) "($nbclassname getCMemberPtr: $nbinput)"
+%typemap(nbin) SWIGTYPE "($nbinput swigValidCPtr)"
+%typemap(nbin) SWIGTYPE *, SWIGTYPE &, SWIGTYPE &&, SWIGTYPE [] "($nbinput swigValidCPtr)"
+%typemap(nbin) SWIGTYPE (CLASS::*) "($nbinput swigValidCPtr)"
 
 /* The nbout typemap is used for converting function return types from the return type
  * used in the PInvoke class to the type returned by the proxy, module or type wrapper class.
@@ -342,33 +344,30 @@
 
 %typemap(nbout, excode=SWIGEXCODE) SWIGTYPE %{
     | ret |
-    ret := $&nbclassname newPtr: ($imcall) owned: true.$excode
+    ret := $&nbclassname fromCPtr: ($imcall) owner: true.$excode
     ^ ret
   %}
 
 %typemap(nbout, excode=SWIGEXCODE) SWIGTYPE & %{
     | ret |
-    ret := $&nbclassname newPtr: ($imcall) owned: $owner.$excode
+    ret := $&nbclassname fromCPtr: ($imcall) owner: $owner.$excode
     ^ ret
   %}
 
 %typemap(nbout, excode=SWIGEXCODE) SWIGTYPE && %{
     | ret |
-    ret := $&nbclassname newPtr: ($imcall) owned: $owner.$excode
+    ret := $&nbclassname fromCPtr: ($imcall) owner: $owner.$excode
     ^ ret
   %}
 
 %typemap(nbout, excode=SWIGEXCODE) SWIGTYPE *, SWIGTYPE [] %{
     | ret |
-    ret := $&nbclassname newPtr: ($imcall) owned: $owner.$excode
+    ret := $&nbclassname fromCPtr: ($imcall) owner: $owner.$excode
     ^ ret
   %}
 
 %typemap(nbout, excode=SWIGEXCODE) SWIGTYPE (CLASS::*) %{
-    | ret cMemberPtr |
-    string cMemberPtr := $imcall;
-    $nbclassname ret := (cMemberPtr == null) ? null : new $nbclassname(cMemberPtr, $owner);$excode
-    ^ ret
+    self error: 'Not implemented member method wrapping'
   %}
 
 /* Typemaps used for the generation of proxy and type wrapper class code */
@@ -386,7 +385,7 @@
 %typemap(nbdestroy, selector="destroy") SWIGTYPE 
 %{destroy
     swigCPtr ~~ nil ifTrue: [
-        swigCMemOwn ifTrue: [
+        swigCMemOwn and: [ swigSession == Smalltalk session] ifTrue: [
             swigCMemOwn := false.
             $imcall
         ].
@@ -413,6 +412,21 @@
 %typemap(nbinitwith_owner, selector="swigInitWithCPtr:owner:") SWIGTYPE 
 %{initWithCPtr: newSwigCPtr owner: newSwigCMemOwn
     swigCPtr := newSwigCPtr.
-    swigCMemOwn := newSwigCMemOwn
+    swigCMemOwn := newSwigCMemOwn.
+    swigSession := Smalltalk session
 %}
+
+%typemap(nbvalidcptr, selector="swigValidCPtr") SWIGTYPE 
+%{swigValidCPtr
+    swigSession ~~ Smalltalk session or: [swigCPtr == nil]
+        ifTrue: [ self error: 'trying to use an invalid swig wrapper.'].
+    ^ swigCPtr
+%}
+
+/* Some ANSI C typemaps */
+%apply unsigned long { size_t };
+%apply const unsigned long & { const size_t & };
+
+/* enum handling */
+%include "enums.swg"
 
