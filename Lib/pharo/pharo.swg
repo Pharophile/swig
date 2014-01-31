@@ -377,17 +377,17 @@
 %typemap(nbpools)        SWIGTYPE, SWIGTYPE *, SWIGTYPE &, SWIGTYPE &&, SWIGTYPE [], SWIGTYPE (CLASS::*) ""
 %typemap(nbcategory)        SWIGTYPE, SWIGTYPE *, SWIGTYPE &, SWIGTYPE &&, SWIGTYPE [], SWIGTYPE (CLASS::*) ""
 
-%typemap(nbfinalize, selector="finalize") SWIGTYPE
-%{finalize
-    self destroy
+%typemap(nbdestroy_swigcptr, selector="destroySwigCPtr:") SWIGTYPE
+%{destroySwigCPtr: pointerToFree
+    $imcall
 %}
 
 %typemap(nbdestroy, selector="destroy") SWIGTYPE 
 %{destroy
-    swigCPtr ~~ nil ifTrue: [
-        swigCMemOwn and: [ swigSession == Smalltalk session] ifTrue: [
+    swigCPtr ifNotNil: [
+        (swigCMemOwn and: [ swigSession == Smalltalk session]) ifTrue: [
+            self class destroySwigCPtr: swigCPtr.
             swigCMemOwn := false.
-            $imcall
         ].
         swigCPtr := nil
     ]
@@ -397,16 +397,6 @@
 %typemap(nbconstruct) SWIGTYPE 
 %{
     ^ self fromCPtr: ($imcall)
-%}
-
-%typemap(nbfromcptr_owner, selector="fromCPtr:owner") SWIGTYPE 
-%{fromCPtr: swigCPtr owner: swigOwner
-    ^ self basicNew initWithCPtr: swigCPtr owner: swigOwner; yourself
-%}
-
-%typemap(nbfromcptr, selector="fromCPtr:") SWIGTYPE 
-%{fromCPtr: swigCPtr
-    ^ self fromCPtr: swigCPtr owner: true
 %}
 
 %typemap(nbinitwith_owner, selector="swigInitWithCPtr:owner:") SWIGTYPE 
@@ -421,6 +411,16 @@
     (swigSession ~~ Smalltalk session or: [swigCPtr == nil])
         ifTrue: [ self error: 'trying to use an invalid swig wrapper.'].
     ^ swigCPtr
+%}
+
+%typemap(nbresourcedata, selector="resourceData") SWIGTYPE 
+%{resourceData
+    ^ swigCPtr
+%}
+
+%typemap(nbfinalizeresourcedata, selector="finalizeResourceData:") SWIGTYPE 
+%{finalizeResourceData: aHandle
+    ^ self destroySwigCPtr: aHandle 
 %}
 
 /* Some ANSI C typemaps */

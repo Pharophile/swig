@@ -36,6 +36,7 @@ class PHARO : public Language {
   File *f_wrappers;
   File *f_init;
 
+  File *f_fileout_runtime;
   File *f_fileout;
   File *f_class_declarations;
   File *f_class_methods;
@@ -57,6 +58,8 @@ class PHARO : public Language {
   String *module_class_name;  // module class name
   String *module_class_constants;
   String *module_class_constants_code;
+  String *reference_class_name;
+  String *wrapped_object_class_name;
   String *variable_name;
   String *proxy_class_name;
   String *proxy_class_constants;
@@ -71,13 +74,14 @@ public:
     : empty_string(NewString("")),
       object_string(NewString("Object")),
       swig_wrapper_category(NewString("swig wrapper")),
-      nativeboost_primitive(NewString("<primitive: #primitiveNativeCall module: #NativeBoostPlugin>")),
+      nativeboost_primitive(NewString("<primitive: #primitiveNativeCall module: #NativeBoostPlugin error: errorCode>")),
       swig_types_hash(NULL),
       f_begin(NULL),
       f_runtime(NULL),
       f_header(NULL),
       f_wrappers(NULL),
       f_init(NULL),
+      f_fileout_runtime(NULL),
       f_fileout(NULL),
       f_class_declarations(NULL),
       f_class_methods(NULL),
@@ -97,6 +101,8 @@ public:
       module_class_name(NULL),
       module_class_constants(NULL),
       module_class_constants_code(NULL),
+      reference_class_name(NULL),
+      wrapped_object_class_name(NULL),
       variable_name(NULL),
       proxy_class_name(NULL),
       proxy_class_constants(NULL),
@@ -170,10 +176,10 @@ public:
         imclass_name = Copy(Getattr(optionsnode, "imclassname"));
     }
 
-    /* Get the output file name */
+    // Get the output file name
     String *outfile = Getattr(n,"outfile");
 
-    /* Initialize I/O */
+    // Initialize I/O
     f_begin = NewFile(outfile, "w", SWIG_output_files());
     if (!f_begin) {
        FileErrorDisplay(outfile);
@@ -183,12 +189,13 @@ public:
     f_init = NewString("");
     f_header = NewString("");
     f_wrappers = NewString("");
+    f_fileout_runtime = NewString("");
 
-    /* Make sure there's a fileout name */
+    // Make sure there's a fileout name
     if(!fileout)
       fileout = NewStringf("%s%s.st", SWIG_output_directory(), Getattr(n, "name"));
 
-    /* Smalltalk file out. */
+    // Smalltalk file out.
     f_fileout = NewFile(fileout, "w", SWIG_output_files());
     if (!f_fileout) {
        FileErrorDisplay(fileout);
@@ -197,55 +204,65 @@ public:
     f_class_declarations = NewString("");
     f_class_methods = NewString("");
 
-    /* Register file targets with the SWIG file handler */
+    // Register file targets with the SWIG file handler
     Swig_register_filebyname("begin", f_begin);
     Swig_register_filebyname("header", f_header);
     Swig_register_filebyname("wrapper", f_wrappers);
     Swig_register_filebyname("runtime", f_runtime);
+    Swig_register_filebyname("fileout_runtime", f_fileout_runtime);
     Swig_register_filebyname("init", f_init);
 
     swig_types_hash = NewHash();
 
     // Make the intermediary class and module class names. The intermediary class name can be set in the module directive.
+    const String *module_name = Getattr(n, "name");
     if (!imclass_name) {
-      imclass_name = NewStringf("%sNBCallout", Getattr(n, "name"));
-      module_class_name = Copy(Getattr(n, "name"));
+      imclass_name = NewStringf("%sCInterface", module_name);
+      module_class_name = Copy(module_name);
     } else {
       // Rename the module name if it is the same as intermediary class name - a backwards compatibility solution
-      if (Cmp(imclass_name, Getattr(n, "name")) == 0)
-        module_class_name = NewStringf("%sModule", Getattr(n, "name"));
+      if (Cmp(imclass_name, module_name) == 0)
+        module_class_name = NewStringf("%sModule", module_name);
       else
-        module_class_name = Copy(Getattr(n, "name"));
+        module_class_name = Copy(module_name);
     }
+
+    // Reference class name and wrapped object class name.
+    reference_class_name = NewStringf("%sSwigRef", module_name);
+    wrapped_object_class_name = NewStringf("%sSwigObject", module_name);
 
     // module class and intermediary classes are always created
     if (!addSymbol(imclass_name, n))
       return SWIG_ERROR;
     if (!addSymbol(module_class_name, n))
       return SWIG_ERROR;
+    if (!addSymbol(reference_class_name, n))
+      return SWIG_ERROR;
+    if (!addSymbol(wrapped_object_class_name, n))
+      return SWIG_ERROR;
 
     // Create strings for the module.
     module_class_constants_code = NewString("");
     module_class_constants = NewString("");
 
-    /* Ensure there's a category */
+    // Ensure there's a category
     if(!category)
-      category = Copy(Getattr(n, "name"));
+      category = Copy(module_name);
 
-    /* Ensure there's a library name */
+    // Ensure there's a library name
     if(!libname)
-      libname = Copy(Getattr(n, "name"));
+      libname = Copy(module_name);
 
-    /* Declare the intermediate class */
+    // Declare the intermediate class
     subclass(object_string, imclass_name,
              /*instanceVariables:*/ empty_string,
              /*classVariables:*/ empty_string,
              /*poolDictionary:*/ empty_string, category);
 
-    /* Emit intermediate class library import */
+    // Emit intermediate class library import
     addLibraryImportToClass(imclass_name, libname);
 
-    /* Output module initialization code */
+    // Output module initialization code
     Swig_banner(f_begin);
 
     Swig_name_register("wrapper", "PharoNB_%f");
@@ -254,14 +271,14 @@ public:
     Printf(f_wrappers, "extern \"C\" {\n");
     Printf(f_wrappers, "#endif\n\n");
 
-    /* Emit code for children */
+    // Emit code for children
     Language::top(n);
 
     Printf(f_wrappers, "#ifdef __cplusplus\n");
     Printf(f_wrappers, "}\n");
     Printf(f_wrappers, "#endif\n");
 
-    /* Finish the module class */
+    // Finish the module class
     subclass(object_string, module_class_name,
              /*instanceVariables:*/ empty_string,
              /*classVariables:*/ module_class_constants,
@@ -273,11 +290,19 @@ public:
       emitTypeWrapperClass(swig_type.key, swig_type.item);
     }
 
-    /* Write Smalltalk code to th file */
+    // Replace the module name, reference class name, wrapped object name in
+    // the common runtime
+    Replaceall(f_fileout_runtime, "$module", module_name);
+    Replaceall(f_fileout_runtime, "$refclass", reference_class_name);
+    Replaceall(f_fileout_runtime, "$objclass", wrapped_object_class_name);
+    Replaceall(f_fileout_runtime, "$category", category);
+    
+    // Write Smalltalk code to th file.
+    Dump(f_fileout_runtime, f_fileout);
     Dump(f_class_declarations, f_fileout);
     Dump(f_class_methods, f_fileout);
 
-    /* Write all to the file */
+    // Write all to the file
     Dump(f_runtime, f_begin);
     Dump(f_header, f_begin);
     Dump(f_wrappers, f_begin);
@@ -286,7 +311,7 @@ public:
     Delete(swig_types_hash);
     swig_types_hash = NULL;
 
-    /* Cleanup strings */
+    // Cleanup strings
     Delete(fileout);
     Delete(libname);
     Delete(category);
@@ -295,7 +320,7 @@ public:
     Delete(module_class_constants_code);
     Delete(module_class_constants);
 
-    /* Cleanup files */
+    // Cleanup files
     Delete(f_runtime);
     Delete(f_header);
     Delete(f_wrappers);
@@ -304,6 +329,7 @@ public:
 
     Delete(f_class_declarations);
     Delete(f_class_methods);
+    Delete(f_fileout_runtime);
     Delete(f_fileout);
 
     return SWIG_OK;
@@ -406,7 +432,7 @@ public:
     if (!is_void_return)
       Wrapper_add_localv(wrapper, "nbresult", c_return_type, "nbresult", NIL);
 
-    Printv(wrapper->def, " SWIGEXPORT ", c_return_type, " SWIGSTDCALL ", wname, "(", NIL);
+    Printv(wrapper->def, " SWIGEXPORT ", c_return_type, " ", wname, "(", NIL);
 
     // Emit all of the local variables for holding arguments.
     emit_parameter_variables(params, wrapper);
@@ -1345,7 +1371,7 @@ public:
     String *symname = Getattr(n, "sym:name");
 
     if (proxy_flag) {
-      Printv(destructor_call, imclass_name, " ", Swig_name_destroy(getNSpace(), symname), "_nbarg1: swigCPtr", NIL);
+      Printv(destructor_call, imclass_name, " ", Swig_name_destroy(getNSpace(), symname), "_nbarg1: pointerToFree", NIL);
     }
     return SWIG_OK;
   }
@@ -1446,7 +1472,7 @@ public:
 
     // Use by default Object as a base.
     if(!wanted_base || !Len(wanted_base))
-      wanted_base = object_string;
+      wanted_base = wrapped_object_class_name;
 
     // Add extra instance variables.
     const String *extra_inst_vars = typemapLookup(n, "nbinstvars", typemap_lookup_type, WARN_NONE);
@@ -1463,11 +1489,6 @@ public:
     if(extra_pools)
       Printf(proxy_class_pool_dictionaries, "%s%s", Len(proxy_class_pool_dictionaries) > 0 ? " " : "", extra_pools);
 
-    // Add the swigCPtr and swigOwner instance variables.
-    if(!derived)
-      Printf(proxy_class_instance_variables, "%sswigCPtr swigCMemOwn swigSession",
-             Len(proxy_class_instance_variables) > 0 ? " " : "");
-
     // Add the constants
     if(Len(proxy_class_constants) != 0) {
       Printv(proxy_class_variables, Len(proxy_class_variables) > 0 ? " " : "", proxy_class_constants, NIL);
@@ -1482,12 +1503,12 @@ public:
              proxy_class_variables,
              proxy_class_pool_dictionaries, Len(custom_category) > 0 ? custom_category : category);
 
-    // destroy method
+    // destroySwigCPtr method
     const String *type_map;
     if (derived) {
-      type_map = typemapLookup(n, "nbdestroy_derived", typemap_lookup_type, WARN_NONE);
+      type_map = typemapLookup(n, "nbdestroy_swigcptr_derived", typemap_lookup_type, WARN_NONE);
     } else {
-      type_map = typemapLookup(n, "nbdestroy", typemap_lookup_type, WARN_NONE);
+      type_map = typemapLookup(n, "nbdestroy_swigcptr", typemap_lookup_type, WARN_NONE);
     }
 
     if(Len(type_map) > 0) {
@@ -1497,24 +1518,9 @@ public:
       else
         Replaceall(destroy_code, "$imcall", "self error: 'C++ destructor does not have public access'.");
 
-      methodFor(proxy_class_name, swig_wrapper_category, destroy_code);
+      methodForClass(proxy_class_name, swig_wrapper_category, destroy_code);
       Delete(destroy_code);
     }
-
-    // finalize method
-    emitTypeMappedMethod(n, "nbfinalize", "nbfinalize_derived", derived, false);
-
-    // fromCPtr:owner
-    emitTypeMappedMethod(n, "nbfromcptr_owner", "nbfromcptr_owner_derived", derived, true);
-
-    // fromCPtr:
-    emitTypeMappedMethod(n, "nbfromcptr", "nbfromcptr_derived", derived, true);
-
-    //initWithCPtr:owner:
-    emitTypeMappedMethod(n, "nbinitwith_owner", "nbinitwith_owner_derived", derived, false);
-
-    //swigValidCPtr
-    emitTypeMappedMethod(n, "nbvalidcptr", "nbvalidcptr_derived", derived, false);
 
     // Make the class initialize method.
     String *initialize_body = NewString("");

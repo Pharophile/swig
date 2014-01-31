@@ -71,3 +71,102 @@ char *SWIG_csharp_string_callback(const char *s)
 %}
 #endif // SWIG_PHARO_NO_EXCEPTION_HELPER
 
+// Runtime class declarations.
+%insert(fileout_runtime) %{
+Object subclass: #$objclass
+  instanceVariableNames: 'swigRef swigCMemOwn'
+  classVariableNames: ''
+  poolDictionaries: ''
+  category: '$category'!
+
+Object subclass: #$refclass
+  instanceVariableNames: 'pointer session'
+  classVariableNames: ''
+  poolDictionaries: ''
+  category: '$category'!
+%}
+
+// Wrapped object class side methods
+%insert(fileout_runtime) %{
+!$objclass class methodsFor: 'swig runtime'!
+fromCPtr: swigCPtr
+    ^ self fromCPtr: swigCPtr owner: true.
+!
+fromCPtr: swigCPtr owner: swigOwner
+    ^ self fromRef: ($refclass new: swigCPtr) owner: swigOwner
+!
+fromRef: swigRef owner: swigOwner
+    | res |
+    res := self basicNew initWithRef: swigRef owner: swigOwner; yourself.
+    swigOwner ifTrue: [
+        NBExternalResourceManager addResource: res.
+    ].
+    ^ res.
+!
+finalizeResourceData: aSwigRef
+    aSwigRef isValid ifTrue: [
+        self destroySwigCPtr: aSwigRef validCPtr.
+        aSwigRef makeInvalid
+    ]
+!
+destroySwigCPtr: pointerToFree
+    self subclassResponsibility
+! !
+%}
+
+// Wrapped object class methods
+%insert(fileout_runtime) %{
+!$objclass methodsFor: 'swig runtime'!
+initWithRef: newSwigRef owner: newSwigCMemOwn
+    swigRef := newSwigRef.
+    swigCMemOwn := newSwigCMemOwn.
+!
+swigValidCPtr
+    ^ swigRef validCPtr
+!
+resourceData
+    ^ swigRef
+!
+destroy
+    swigRef ifNotNil: [
+        swigCMemOwn ifTrue: [
+            self class finalizeResourceData: swigRef.            
+            swigCMemOwn := false.
+        ].
+        swigRef := nil
+    ]
+! !
+%}
+
+// SWIG reference class side methods
+%insert(fileout_runtime) %{
+!$refclass class methodsFor: 'swig runtime'!
+new: pointer
+    ^ self new pointer: pointer; yourself
+! !
+%}
+
+// SWIG reference class methods
+%insert(fileout_runtime) %{
+!$refclass methodsFor: 'swig runtime'!
+initialize
+    session := Smalltalk session.
+!
+pointer: aPointer
+    pointer := aPointer
+!
+pointer
+    ^ pointer
+!
+isValid
+    ^ pointer ~~ nil and: [session == (Smalltalk session)]
+!
+validCPtr
+    self isValid ifFalse: [ self error: 'Trying to use an invalid reference' ].
+    ^ pointer
+!
+makeInvalid
+    pointer := nil.
+! !
+
+%}
