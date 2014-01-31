@@ -1076,7 +1076,7 @@ public:
 
     Printv(imcall, imclass_name, " $imfuncname", NIL);
     if (!static_flag)
-      Printf(imcall, "_nbarg1: swigCPtr");
+      Printf(imcall, "_nbarg1: self swigValidCPtr");
 
     emit_mark_varargs(params);
 
@@ -1878,37 +1878,20 @@ public:
     Setattr(n, "classtypeobj", type);
 
     const String *pure_baseclass = typemapLookup(n, "nbbase", type, WARN_NONE);
-    bool derived = false;
 
     // Emit the class
     if(Len(pure_baseclass) == 0)
-      pure_baseclass = object_string;
-
-    // Add the swigCPtr and swigOwner instance variables.
-    String *instance_variables = NewString("swigCPtr swigCMemOwn swigSession");
+      pure_baseclass = wrapped_object_class_name;
 
     // Use a custom category
     const String *custom_category = typemapLookup(n, "nbcategory", type, WARN_NONE);
     
     // Write the class
     subclass(pure_baseclass, classname,
-             instance_variables,
+             empty_string,
              empty_string,
              empty_string, Len(custom_category) > 0 ? custom_category : category);
 
-    // fromCPtr:owner
-    emitTypeMappedMethodFor(classname, n, "nbfromcptr_owner", "nbfromcptr_owner_derived", derived, true);
-
-    // fromCPtr:
-    emitTypeMappedMethodFor(classname, n, "nbfromcptr", "nbfromcptr_derived", derived, true);
-
-    //initWithCPtr:owner:
-    emitTypeMappedMethodFor(classname, n, "nbinitwith_owner", "nbinitwith_owner_derived", derived, false);
-
-    //swigValidCPtr
-    emitTypeMappedMethodFor(classname, n, "nbvalidcptr", "nbvalidcptr_derived", derived, false);
-
-    Delete(instance_variables);
     Delete(n);
   }
 
