@@ -10,6 +10,7 @@
  *
  * Pharo language module for SWIG.
  * ----------------------------------------------------------------------------- */
+#include <ctype.h>
 #include "swigmod.h"
 
 static void show_usage() {
@@ -416,7 +417,7 @@ public:
         typeMap = ctypeout;
       Printf(c_return_type, "%s", typeMap);
     } else {
-      Swig_warning(WARN_CSHARP_TYPEMAP_CTYPE_UNDEF, input_file, line_number, "No ctype typemap defined for %s\n", SwigType_str(type, 0));
+      Swig_warning(WARN_PHARO_TYPEMAP_CTYPE_UNDEF, input_file, line_number, "No ctype typemap defined for %s\n", SwigType_str(type, 0));
     }
 
     if ((typeMap = Swig_typemap_lookup("imtype", n, "", 0))) {
@@ -425,7 +426,7 @@ public:
         typeMap = imtypeout;
       Printf(im_return_type, "%s", typeMap);
     } else {
-      Swig_warning(WARN_CSHARP_TYPEMAP_CSTYPE_UNDEF, input_file, line_number, "No imtype typemap defined for %s\n", SwigType_str(type, 0));
+      Swig_warning(WARN_PHARO_TYPEMAP_NBTYPE_UNDEF, input_file, line_number, "No imtype typemap defined for %s\n", SwigType_str(type, 0));
     }
 
     is_void_return = (Cmp(c_return_type, "void") == 0);
@@ -483,7 +484,7 @@ public:
       if ((typeMap = Getattr(param, "tmap:ctype"))) {
         Printv(c_param_type, typeMap, NIL);
       } else {
-        Swig_warning(WARN_CSHARP_TYPEMAP_CTYPE_UNDEF, input_file, line_number, "No ctype typemap defined for %s\n", SwigType_str(param_type, 0));
+        Swig_warning(WARN_PHARO_TYPEMAP_CTYPE_UNDEF, input_file, line_number, "No ctype typemap defined for %s\n", SwigType_str(param_type, 0));
       }
 
       /* Get the intermediary class parameter types of the parameter */
@@ -491,7 +492,7 @@ public:
         const String *inattributes = Getattr(param, "tmap:imtype:inattributes");
         Printf(im_param_type, "%s%s", inattributes ? inattributes : empty_string, typeMap);
       } else {
-        Swig_warning(WARN_CSHARP_TYPEMAP_CSTYPE_UNDEF, input_file, line_number, "No imtype typemap defined for %s\n", SwigType_str(param_type, 0));
+        Swig_warning(WARN_PHARO_TYPEMAP_NBTYPE_UNDEF, input_file, line_number, "No imtype typemap defined for %s\n", SwigType_str(param_type, 0));
       }
 
       /* Add parameter to intermediary class method */
@@ -682,10 +683,10 @@ public:
       // so that code which checks for pending exceptions is added in the C# proxy method.
       if (!Getattr(n, "csharp:canthrow")) {
         if (Strstr(wrapper->code, "SWIG_exception")) {
-          Swig_warning(WARN_CSHARP_CANTHROW, input_file, line_number,
+          Swig_warning(WARN_PHARO_CANTHROW, input_file, line_number,
                        "Unmanaged code contains a call to SWIG_exception and C# code does not handle pending exceptions via the canthrow attribute.\n");
         } else if (Strstr(wrapper->code, "SWIG_CSharpSetPendingException")) {
-          Swig_warning(WARN_CSHARP_CANTHROW, input_file, line_number,
+          Swig_warning(WARN_PHARO_CANTHROW, input_file, line_number,
                        "Unmanaged code contains a call to a SWIG_CSharpSetPendingException method and C# code does not handle pending exceptions via the canthrow attribute.\n");
         }
       }
@@ -857,7 +858,7 @@ public:
         }
         Printv(imcall, type_map, NIL);
       } else {
-        Swig_warning(WARN_CSHARP_TYPEMAP_CSIN_UNDEF, input_file, line_number, "No nbin typemap defined for %s\n", SwigType_str(pt, 0));
+        Swig_warning(WARN_PHARO_TYPEMAP_NBIN_UNDEF, input_file, line_number, "No nbin typemap defined for %s\n", SwigType_str(pt, 0));
       }
 
       /* Add parameter to module class function */
@@ -897,7 +898,7 @@ public:
       substituteClassname(type, type_map);
       Replaceall(type_map, "$imcall", imcall);
     } else {
-      Swig_warning(WARN_CSHARP_TYPEMAP_CSOUT_UNDEF, input_file, line_number, "No nbout typemap defined for %s\n", SwigType_str(type, 0));
+      Swig_warning(WARN_PHARO_TYPEMAP_NBOUT_UNDEF, input_file, line_number, "No nbout typemap defined for %s\n", SwigType_str(type, 0));
     }
 
     // Normal function call
@@ -954,6 +955,11 @@ public:
       proxy_class_instance_variables = NewString("");
       proxy_class_variables = NewString("");
       proxy_class_pool_dictionaries = NewString("");
+    }
+
+    if(!isupper(*Char(proxy_class_name))) {
+        Swig_warning(WARN_PHARO_INVALID_CLASSNAME, input_file, line_number, "Invalid Smalltalk class name for %s\n", proxy_class_name);
+        return SWIG_NOWRAP;
     }
 
     Language::classHandler(n);
@@ -1117,7 +1123,7 @@ public:
         String *sel_name = makeSelectorName(n, param, i);
         String *arg = makeParameterName(n, param, i, setter_flag);
         if(gensel) {
-          Printf(function_code, "%s: %s", sel_name, arg);
+          Printf(function_code, " %s: %s", sel_name, arg);
         } else {
           Printf(function_code, ": %s", arg);
         }
@@ -1153,7 +1159,7 @@ public:
           }
           Printv(imcall, type_map, NIL);
         } else {
-          Swig_warning(WARN_CSHARP_TYPEMAP_CSIN_UNDEF, input_file, line_number, "No csin typemap defined for %s\n", SwigType_str(pt, 0));
+          Swig_warning(WARN_PHARO_TYPEMAP_NBIN_UNDEF, input_file, line_number, "No csin typemap defined for %s\n", SwigType_str(pt, 0));
         }
 
         Delete(arg);
@@ -1196,7 +1202,7 @@ public:
       Replaceall(imcall, "$imfuncname", intermediary_function_name);
       Replaceall(type_map, "$imcall", imcall);
     } else {
-      Swig_warning(WARN_CSHARP_TYPEMAP_CSOUT_UNDEF, input_file, line_number, "No csout typemap defined for %s\n", SwigType_str(type, 0));
+      Swig_warning(WARN_PHARO_TYPEMAP_NBOUT_UNDEF, input_file, line_number, "No csout typemap defined for %s\n", SwigType_str(type, 0));
     }
 
     // Normal function call
@@ -1304,7 +1310,7 @@ public:
           }
           Printv(imcall, tm, NIL);
         } else {
-          Swig_warning(WARN_CSHARP_TYPEMAP_CSIN_UNDEF, input_file, line_number, "No csin typemap defined for %s\n", SwigType_str(pt, 0));
+          Swig_warning(WARN_PHARO_TYPEMAP_NBIN_UNDEF, input_file, line_number, "No csin typemap defined for %s\n", SwigType_str(pt, 0));
         }
 
         ++gencomma;
@@ -1316,7 +1322,7 @@ public:
       /* Insert the nbconstruct typemap, doing the replacement for $directorconnect, as needed */
       Hash *attributes = NewHash();
       String *construct_tm = Copy(typemapLookup(n, "nbconstruct", Getattr(n, "name"),
-                                                WARN_CSHARP_TYPEMAP_CSCONSTRUCT_UNDEF, attributes));
+                                                WARN_PHARO_TYPEMAP_NBCONSTRUCT_UNDEF, attributes));
       if (construct_tm)
         Printv(function_code, " ", construct_tm, NIL);
 
@@ -1444,7 +1450,7 @@ public:
             }
             String *proxyclassname = Getattr(n, "classtypeobj");
             String *baseclassname = Getattr(base.item, "name");
-            Swig_warning(WARN_CSHARP_MULTIPLE_INHERITANCE, Getfile(n), Getline(n),
+            Swig_warning(WARN_PHARO_MULTIPLE_INHERITANCE, Getfile(n), Getline(n),
                          "Warning for %s proxy: Base %s ignored. Multiple inheritance is not supported in Java.\n", SwigType_namestr(proxyclassname), SwigType_namestr(baseclassname));
             base = Next(base);
           }
@@ -1465,7 +1471,7 @@ public:
       if (purebase_notderived)
         Swig_error(Getfile(n), Getline(n), "The nbbase typemap for proxy %s must contain just one of the 'replace' or 'notderived' attributes.\n", typemap_lookup_type);
     } else if (Len(pure_baseclass) > 0 && Len(baseclass) > 0) {
-      Swig_warning(WARN_CSHARP_MULTIPLE_INHERITANCE, Getfile(n), Getline(n),
+      Swig_warning(WARN_PHARO_MULTIPLE_INHERITANCE, Getfile(n), Getline(n),
                    "Warning for %s proxy: Base %s ignored. Multiple inheritance is not supported in C#. "
                    "Perhaps you need one of the 'replace' or 'notderived' attributes in the csbase typemap?\n", typemap_lookup_type, pure_baseclass);
     }
@@ -1716,7 +1722,7 @@ public:
     if (Getattr(n, "pharo:canthrow")) {
       int count = Replaceall(code, "$excode", excode);
       if (count < 1 || !excode) {
-        Swig_warning(WARN_CSHARP_EXCODE, input_file, line_number,
+        Swig_warning(WARN_PHARO_EXCODE, input_file, line_number,
                      "Pharo exception may not be thrown - no $excode or excode attribute in '%s' typemap.\n", typemap);
       }
     } else {

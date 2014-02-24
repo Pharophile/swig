@@ -175,12 +175,12 @@
 %}
 %typemap(in, canthrow=1) SWIGTYPE & %{ $1 = ($1_ltype)$input;
   if (!$1) {
-    SWIG_PharoSetPendingExceptionArgument(SWIG_CSharpArgumentNullException, "$1_type type is null", 0);
+    SWIG_PharoSetPendingExceptionArgument(SWIG_PharoArgumentNullException, "$1_type type is null", 0);
     return $null;
   } %}
 %typemap(in, canthrow=1) SWIGTYPE && %{ $1 = ($1_ltype)$input;
   if (!$1) {
-    SWIG_PharoSetPendingExceptionArgument(SWIG_CSharpArgumentNullException, "$1_type type is null", 0);
+    SWIG_PharoSetPendingExceptionArgument(SWIG_PharoArgumentNullException, "$1_type type is null", 0);
     return $null;
   } %}
 %typemap(out) SWIGTYPE * %{ $result = (void *)$1; %} 
@@ -304,6 +304,7 @@
                  float,              const float &,
                  double,             const double &
     "$nbinput"
+
 %typemap(nbin) char *, char *&, char[ANY], char[] "$nbinput"
 %typemap(nbin) SWIGTYPE "($nbinput swigValidCPtr)"
 %typemap(nbin) SWIGTYPE *, SWIGTYPE &, SWIGTYPE &&, SWIGTYPE [] "($nbinput swigValidCPtr)"
