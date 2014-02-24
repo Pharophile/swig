@@ -298,6 +298,11 @@ public:
     Replaceall(f_fileout_runtime, "$objclass", wrapped_object_class_name);
     Replaceall(f_fileout_runtime, "$category", category);
     
+    // Convert newlines Smalltalk code into in CR.
+    convertNewlines(f_fileout_runtime);
+    convertNewlines(f_class_declarations);
+    convertNewlines(f_class_methods);
+
     // Write Smalltalk code to th file.
     Dump(f_fileout_runtime, f_fileout);
     Dump(f_class_declarations, f_fileout);
@@ -334,6 +339,11 @@ public:
     Delete(f_fileout);
 
     return SWIG_OK;
+  }
+
+  void convertNewlines(String *str) {
+    Replaceall(str, "\r\n", "\r"); // Windows
+    Replaceall(str, "\n", "\r"); // Unix
   }
 
   void emitModuleInitialize() {
